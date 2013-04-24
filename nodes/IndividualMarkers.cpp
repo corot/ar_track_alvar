@@ -70,10 +70,9 @@ tf::TransformListener *tf_listener;
 tf::TransformBroadcaster *tf_broadcaster;
 MarkerDetector<MarkerData> marker_detector;
 
-bool commandLineCfg = false;
 bool enableSwitched = false;
 bool enabled = true;
-double max_frequency = 30.0;  // run at the rate of pointcloud callbacks by default
+double max_frequency;
 double marker_size;
 double max_new_marker_error;
 double max_track_error;
@@ -458,16 +457,7 @@ void getPointCloudCallback (const sensor_msgs::PointCloud2ConstPtr &msg)
 
 void configCallback(ar_track_alvar::ParamsConfig &config, uint32_t level)
 {
-  if (commandLineCfg == true)
-  {
-    // Skip the first (automatic) configuration to keep the command line parameters
-    ROS_INFO("AR tracker command line configuration: %.2f %.2f %.2f %.2f",
-             max_frequency, marker_size, max_new_marker_error, max_track_error);
-    commandLineCfg = false;
-    return;
-  }
-
-  ROS_INFO("AR tracker reconfigure request: %s %.2f %.2f %.2f %.2f", config.enabled?"ENABLED":"DISABLED",
+  ROS_INFO("AR tracker reconfigured: %s %.2f %.2f %.2f %.2f", config.enabled?"ENABLED":"DISABLED",
            config.max_frequency, config.marker_size, config.max_new_marker_error, config.max_track_error);
 
   enableSwitched = enabled != config.enabled;
@@ -506,7 +496,13 @@ int main(int argc, char *argv[])
   if(argc > 7)
     max_frequency = atof(argv[7]);
 
-  commandLineCfg = true;
+  // Set dynamically configurable parameters so they don't get replaced by default values
+  n.setParam("ar_track_alvar/marker_size", marker_size);
+  n.setParam("ar_track_alvar/max_new_marker_error", max_new_marker_error);
+  n.setParam("ar_track_alvar/max_track_error", max_track_error);
+
+  if(argc > 7)
+    n.setParam("max_frequency", max_frequency);
 
   cam = new Camera(n, cam_info_topic);
   tf_listener = new tf::TransformListener(n);
@@ -527,8 +523,12 @@ int main(int argc, char *argv[])
   ros::Duration(1.0).sleep();
   ros::spinOnce();	
 
-  ROS_INFO ("Subscribing to image topic %d",argc);
-  cloud_sub_ = n.subscribe(cam_image_topic, 1, &getPointCloudCallback);
+  if (enabled == true)
+  {
+    // This always happens, as enable is true by default
+    ROS_INFO ("Subscribing to image topic %d",argc);
+    cloud_sub_ = n.subscribe(cam_image_topic, 1, &getPointCloudCallback);
+  }
 
   // Run at the configured rate, discarding pointcloud msgs if necessary
   ros::Rate rate(max_frequency);
@@ -541,6 +541,7 @@ int main(int argc, char *argv[])
     if (std::abs((rate.expectedCycleTime() - ros::Duration(1.0/max_frequency)).toSec()) > 0.001)
     {
       // Change rate dynamically; if must be above 0, as 0 will provoke a segfault on next spinOnce
+      ROS_DEBUG("Changing frequency from %.2f to %.2f", 1.0/rate.expectedCycleTime().toSec(), max_frequency);
       rate = ros::Rate(max_frequency);
     }
 
@@ -552,6 +553,8 @@ int main(int argc, char *argv[])
         cloud_sub_.shutdown();
       else
         cloud_sub_ = n.subscribe(cam_image_topic, 1, &getPointCloudCallback);
+
+      enableSwitched = false;
     }
   }
 
